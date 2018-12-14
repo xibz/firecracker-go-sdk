@@ -26,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/firecracker-microvm/firecracker-go-sdk/client"
 	models "github.com/firecracker-microvm/firecracker-go-sdk/client/models"
 	log "github.com/sirupsen/logrus"
 )
@@ -474,7 +475,13 @@ func (m *Machine) createBootSource(ctx context.Context, imagePath, kernelArgs st
 		BootArgs:        kernelArgs,
 	}
 
-	resp, err := m.client.PutGuestBootSource(ctx, &bsrc)
+	timeout, cancel := context.WithTimeout(ctx, firecrackerRequestTimeout)
+	defer cancel()
+
+	bootSource := ops.NewPutGuestBootSourceParamsWithContext(timeout)
+	bootSource.SetBody(&bsrc)
+
+	resp, err := m.client.Operations.PutGuestBootSource(bootSource)
 	if err == nil {
 		m.logger.Printf("PutGuestBootSource: %s", resp.Error())
 	}
@@ -551,7 +558,11 @@ func (m *Machine) startInstance(ctx context.Context) error {
 		ActionType: models.InstanceActionInfoActionTypeInstanceStart,
 	}
 
-	resp, err := m.client.CreateSyncAction(ctx, &info)
+	params := ops.NewCreateSyncActionParams()
+	params.SetContext(ctx)
+	params.SetInfo(&info)
+
+	resp, err := m.client.Operations.CreateSyncAction(params)
 	if err == nil {
 		m.logger.Printf("startInstance successful: %s", resp.Error())
 	} else {
@@ -579,7 +590,10 @@ func (m *Machine) SetMetadata(ctx context.Context, metadata interface{}) error {
 // refreshMachineConfig synchronizes our cached representation of the machine configuration
 // with that reported by the Firecracker API
 func (m *Machine) refreshMachineConfig() error {
-	resp, err := m.client.GetMachineConfig()
+	p := ops.NewGetMachineConfigParams()
+	p.SetTimeout(firecrackerRequestTimeout)
+
+	resp, err := m.client.Operations.GetMachineConfig(p)
 	if err != nil {
 		return err
 	}

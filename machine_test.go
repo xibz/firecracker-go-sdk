@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/firecracker-microvm/firecracker-go-sdk/client"
 	models "github.com/firecracker-microvm/firecracker-go-sdk/client/models"
 	"github.com/firecracker-microvm/firecracker-go-sdk/client/operations"
 	ops "github.com/firecracker-microvm/firecracker-go-sdk/client/operations"

@@ -16,6 +16,7 @@ package firecracker
 import (
 	"os/exec"
 
+	client "github.com/firecracker-microvm/firecracker-go-sdk/client"
 	"github.com/sirupsen/logrus"
 )
 
