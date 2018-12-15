@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -143,9 +144,10 @@ func TestMicroVMExecution(t *testing.T) {
 	t.Run("TestCreateBootSource", func(t *testing.T) { testCreateBootSource(ctx, t, m, vmlinuxPath) })
 	t.Run("TestCreateNetworkInterface", func(t *testing.T) { testCreateNetworkInterfaceByID(ctx, t, m) })
 	t.Run("TestAttachRootDrive", func(t *testing.T) { testAttachRootDrive(ctx, t, m) })
-	t.Run("TestAttachSecondaryDrive", func(t *testing.T) { testAttachSecondaryDrive(ctx, t, m) })
+	t.Run("TestAttachSecondaryDrive", func(t *testing.T) { testAttachSecondaryDrive(ctx, t, m, 2) })
 	t.Run("TestAttachVsock", func(t *testing.T) { testAttachVsock(ctx, t, m) })
 	t.Run("SetMetadata", func(t *testing.T) { testSetMetadata(ctx, t, m) })
+	t.Run("TestSwapGuestDrive", func(t *testing.T) { testSwapGuestDrive(vmmCtx, t, m, 2) })
 	t.Run("TestStartInstance", func(t *testing.T) { testStartInstance(vmmCtx, t, m) })
 
 	// Let the VMM start and stabilize...
@@ -289,6 +291,19 @@ func testCreateBootSource(ctx context.Context, t *testing.T, m *Machine, vmlinux
 	err := m.createBootSource(ctx, vmlinuxPath, "ro console=ttyS0 noapic reboot=k panic=0 pci=off nomodules")
 	if err != nil {
 		t.Errorf("failed to create boot source: %s", err)
+	}
+}
+
+func testSwapGuestDrive(ctx context.Context, t *testing.T, m *Machine, id int) {
+	idStr := strconv.Itoa(id)
+	path := filepath.Join(testDataPath, "drive-3.img")
+	partialDrive := models.PartialDrive{
+		DriveID:    &idStr,
+		PathOnHost: &path,
+	}
+
+	if err := m.SwapGuestDrive(ctx, partialDrive); err != nil {
+		t.Errorf("unexpected error on swapping guest drive: %v", err)
 	}
 }
 

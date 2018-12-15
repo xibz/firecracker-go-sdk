@@ -587,6 +587,23 @@ func (m *Machine) SetMetadata(ctx context.Context, metadata interface{}) error {
 	return nil
 }
 
+// SwapGuestDrive will swap the current guest drive of ID index with the new
+// parameters of the partialDrive.
+func (m *Machine) SwapGuestDrive(ctx context.Context, partialDrive models.PartialDrive) error {
+	params := ops.NewPatchGuestDriveByIDParams()
+	params.SetContext(ctx)
+	params.SetBody(&partialDrive)
+	params.DriveID = *partialDrive.DriveID
+
+	if _, err := m.client.Operations.PatchGuestDriveByID(params); err != nil {
+		m.logger.Errorf("PatchGuestDrive failed: %v", err)
+		return err
+	}
+
+	m.logger.Printf("PatchGuestDrive successful")
+	return nil
+}
+
 // refreshMachineConfig synchronizes our cached representation of the machine configuration
 // with that reported by the Firecracker API
 func (m *Machine) refreshMachineConfig() error {
