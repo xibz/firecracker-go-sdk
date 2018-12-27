@@ -208,12 +208,16 @@ func NewMachine(ctx context.Context, cfg Config, opts ...Opt) *Machine {
 
 	m.Handlers = defaultHandlers
 	m.logger = log.NewEntry(logger)
-	if cfg.DisableJailer {
-		m.cmd = defaultFirecrackerVMMCommandBuilder.
-			WithSocketPath(m.cfg.SocketPath).
-			Build(ctx)
-	} else {
-		jail(ctx, m, &cfg)
+	if m.cmd == nil {
+		if cfg.DisableJailer {
+			m.Handlers.Validation = m.Handlers.Validation.Append(ConfigValidationHandler)
+			m.cmd = defaultFirecrackerVMMCommandBuilder.
+				WithSocketPath(m.cfg.SocketPath).
+				Build(ctx)
+		} else {
+			m.Handlers.Validation = m.Handlers.Validation.Append(JailerConfigValidationHandler)
+			jail(ctx, m, &cfg)
+		}
 	}
 
 	for _, opt := range opts {
@@ -492,14 +496,7 @@ func (m *Machine) createNetworkInterface(ctx context.Context, iface NetworkInter
 
 // attachDrive attaches a secondary block device
 func (m *Machine) attachDrive(ctx context.Context, dev models.Drive) error {
-	var err error
 	hostPath := StringValue(dev.PathOnHost)
-
-	_, err = os.Stat(hostPath)
-	if err != nil {
-		return err
-	}
-
 	log.Infof("Attaching drive %s, slot %s, root %t.", hostPath, StringValue(dev.DriveID), BoolValue(dev.IsRootDevice))
 	respNoContent, err := m.client.PutGuestDriveByID(ctx, StringValue(dev.DriveID), &dev)
 	if err == nil {
