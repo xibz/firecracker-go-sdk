@@ -26,8 +26,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/firecracker-microvm/firecracker-go-sdk/client"
 	models "github.com/firecracker-microvm/firecracker-go-sdk/client/models"
+	ops "github.com/firecracker-microvm/firecracker-go-sdk/client/operations"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -475,13 +475,7 @@ func (m *Machine) createBootSource(ctx context.Context, imagePath, kernelArgs st
 		BootArgs:        kernelArgs,
 	}
 
-	timeout, cancel := context.WithTimeout(ctx, firecrackerRequestTimeout)
-	defer cancel()
-
-	bootSource := ops.NewPutGuestBootSourceParamsWithContext(timeout)
-	bootSource.SetBody(&bsrc)
-
-	resp, err := m.client.Operations.PutGuestBootSource(bootSource)
+	resp, err := m.client.PutGuestBootSource(ctx, &bsrc)
 	if err == nil {
 		m.logger.Printf("PutGuestBootSource: %s", resp.Error())
 	}
@@ -558,11 +552,7 @@ func (m *Machine) startInstance(ctx context.Context) error {
 		ActionType: models.InstanceActionInfoActionTypeInstanceStart,
 	}
 
-	params := ops.NewCreateSyncActionParams()
-	params.SetContext(ctx)
-	params.SetInfo(&info)
-
-	resp, err := m.client.Operations.CreateSyncAction(params)
+	resp, err := m.client.CreateSyncAction(ctx, &info)
 	if err == nil {
 		m.logger.Printf("startInstance successful: %s", resp.Error())
 	} else {
@@ -589,13 +579,8 @@ func (m *Machine) SetMetadata(ctx context.Context, metadata interface{}) error {
 
 // SwapGuestDrive will swap the current guest drive of ID index with the new
 // parameters of the partialDrive.
-func (m *Machine) SwapGuestDrive(ctx context.Context, partialDrive models.PartialDrive) error {
-	params := ops.NewPatchGuestDriveByIDParams()
-	params.SetContext(ctx)
-	params.SetBody(&partialDrive)
-	params.DriveID = *partialDrive.DriveID
-
-	if _, err := m.client.Operations.PatchGuestDriveByID(params); err != nil {
+func (m *Machine) SwapGuestDrive(ctx context.Context, driveID, pathOnHost string, opts ...PatchGuestDriveByIDOpt) error {
+	if _, err := m.client.PatchGuestDriveByID(ctx, driveID, pathOnHost); err != nil {
 		m.logger.Errorf("PatchGuestDrive failed: %v", err)
 		return err
 	}
@@ -610,7 +595,7 @@ func (m *Machine) refreshMachineConfig() error {
 	p := ops.NewGetMachineConfigParams()
 	p.SetTimeout(firecrackerRequestTimeout)
 
-	resp, err := m.client.Operations.GetMachineConfig(p)
+	resp, err := m.client.GetMachineConfig()
 	if err != nil {
 		return err
 	}

@@ -21,13 +21,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
-	"github.com/firecracker-microvm/firecracker-go-sdk/client"
 	models "github.com/firecracker-microvm/firecracker-go-sdk/client/models"
 	"github.com/firecracker-microvm/firecracker-go-sdk/client/operations"
 	ops "github.com/firecracker-microvm/firecracker-go-sdk/client/operations"
@@ -144,10 +142,10 @@ func TestMicroVMExecution(t *testing.T) {
 	t.Run("TestCreateBootSource", func(t *testing.T) { testCreateBootSource(ctx, t, m, vmlinuxPath) })
 	t.Run("TestCreateNetworkInterface", func(t *testing.T) { testCreateNetworkInterfaceByID(ctx, t, m) })
 	t.Run("TestAttachRootDrive", func(t *testing.T) { testAttachRootDrive(ctx, t, m) })
-	t.Run("TestAttachSecondaryDrive", func(t *testing.T) { testAttachSecondaryDrive(ctx, t, m, 2) })
+	t.Run("TestAttachSecondaryDrive", func(t *testing.T) { testAttachSecondaryDrive(ctx, t, m) })
 	t.Run("TestAttachVsock", func(t *testing.T) { testAttachVsock(ctx, t, m) })
 	t.Run("SetMetadata", func(t *testing.T) { testSetMetadata(ctx, t, m) })
-	t.Run("TestSwapGuestDrive", func(t *testing.T) { testSwapGuestDrive(vmmCtx, t, m, 2) })
+	t.Run("TestSwapGuestDrive", func(t *testing.T) { testSwapGuestDrive(vmmCtx, t, m) })
 	t.Run("TestStartInstance", func(t *testing.T) { testStartInstance(vmmCtx, t, m) })
 
 	// Let the VMM start and stabilize...
@@ -294,15 +292,9 @@ func testCreateBootSource(ctx context.Context, t *testing.T, m *Machine, vmlinux
 	}
 }
 
-func testSwapGuestDrive(ctx context.Context, t *testing.T, m *Machine, id int) {
-	idStr := strconv.Itoa(id)
+func testSwapGuestDrive(ctx context.Context, t *testing.T, m *Machine) {
 	path := filepath.Join(testDataPath, "drive-3.img")
-	partialDrive := models.PartialDrive{
-		DriveID:    &idStr,
-		PathOnHost: &path,
-	}
-
-	if err := m.SwapGuestDrive(ctx, partialDrive); err != nil {
+	if err := m.SwapGuestDrive(ctx, "2", path); err != nil {
 		t.Errorf("unexpected error on swapping guest drive: %v", err)
 	}
 }
