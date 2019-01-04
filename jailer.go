@@ -15,11 +15,13 @@ package firecracker
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"syscall"
 )
 
 const (
@@ -83,6 +85,9 @@ type JailerConfig struct {
 	//	2 : advanced filtering. This adds further checks on some of the
 	//			parameters of the allowed syscalls.
 	SeccompLevel SeccompLevelValue
+
+	// DevMapperStrategy will dictate how files are transfered to the root drive.
+	DevMapperStrategy HandlersAdaptor
 }
 
 // JailerCommandBuilder will build a jailer command. This can be used to
@@ -339,7 +344,7 @@ func (b JailerCommandBuilder) Build(ctx context.Context) *exec.Cmd {
 
 // Jail will set up proper handlers and remove configuration validation due to
 // stating of files
-func jail(ctx context.Context, m *Machine, cfg *Config) {
+func jail(ctx context.Context, m *Machine, cfg *Config) error {
 	rootfs := ""
 	if len(cfg.JailerCfg.ChrootBaseDir) > 0 {
 		rootfs = filepath.Join(cfg.JailerCfg.ChrootBaseDir, "firecracker", cfg.JailerCfg.ID)
@@ -361,10 +366,11 @@ func jail(ctx context.Context, m *Machine, cfg *Config) {
 		WithStderr(os.Stderr).
 		Build(ctx)
 
-	m.Handlers.FcInit = m.Handlers.FcInit.AppendAfter(
-		CreateMachineHandlerName,
-		LinkFilesHandler(filepath.Join(rootfs, rootfsFolderName), filepath.Base(cfg.KernelImagePath)),
-	)
+	if err := cfg.JailerCfg.DevMapperStrategy.AdaptHandlers(&m.Handlers); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func linkFileToRootFS(cfg JailerConfig, dst, src string) error {
@@ -412,5 +418,82 @@ func LinkFilesHandler(rootfs, kernelImageFileName string) Handler {
 	}
 }
 
-type jailerRootFSStrategy interface {
+// NaiveDevMapperStrategy will simply hard link all files, drives and kernel
+// image, to the root drive.
+type NaiveDevMapperStrategy struct {
+	Rootfs          string
+	KernelImagePath string
+}
+
+// NewNaiveDevMapperStrategy returns a new NaivceDevMapperStrategy
+func NewNaiveDevMapperStrategy(rootfs, kernelImagePath string) NaiveDevMapperStrategy {
+	return NaiveDevMapperStrategy{
+		Rootfs:          rootfs,
+		KernelImagePath: kernelImagePath,
+	}
+}
+
+// ErrCreateMachineHandlerMissing occurs when the CreateMachineHandler is not
+// present in FcInit.
+var ErrCreateMachineHandlerMissing = fmt.Errorf("%s is missing from FcInit's list", CreateMachineHandlerName)
+
+// AdaptHandlers will inject the LinkFilesHandler into the handler list.
+func (s NaiveDevMapperStrategy) AdaptHandlers(handlers *Handlers) error {
+	if !handlers.FcInit.Has(CreateMachineHandlerName) {
+		return ErrCreateMachineHandlerMissing
+	}
+
+	handlers.FcInit = handlers.FcInit.AppendAfter(
+		CreateMachineHandlerName,
+		LinkFilesHandler(filepath.Join(s.Rootfs, rootfsFolderName), filepath.Base(s.KernelImagePath)),
+	)
+
+	return nil
+}
+
+// BindMountDevMapperStrategy will use the syscall.Mount function to bind a
+// mount to the root drive.
+type BindMountDevMapperStrategy struct {
+	src      string
+	target   string
+	readOnly bool
+}
+
+// NewBindMountDevMapperStrategy returns a new BindMountDevMapperStrategy that
+// can be used to bind mounts to the firecracker VMM.
+func NewBindMountDevMapperStrategy(src, target string, readOnly bool) BindMountDevMapperStrategy {
+	return BindMountDevMapperStrategy{
+		src:      src,
+		target:   target,
+		readOnly: readOnly,
+	}
+}
+
+// AdaptHandlers will inject the appropriate handler used to bind a mount. This
+// handlers will inject after the CreateMachineHandler, and if that handler
+// does not exist, an error will be returned.
+func (s BindMountDevMapperStrategy) AdaptHandlers(handlers *Handlers) error {
+	if !handlers.FcInit.Has(CreateMachineHandlerName) {
+		return ErrCreateMachineHandlerMissing
+	}
+
+	handlers.FcInit = handlers.FcInit.AppendAfter(
+		CreateMachineHandlerName,
+		Handler{
+			Name: "MountToRootFS",
+			Fn:   s.handler,
+		},
+	)
+
+	return nil
+}
+
+// TODO: add tests and add config remapping logic
+func (s BindMountDevMapperStrategy) handler(ctx context.Context, m *Machine) error {
+	mode := "rw"
+	if s.readOnly {
+		mode = "ro"
+	}
+
+	return syscall.Mount(s.src, s.target, "bind", 0, mode)
 }

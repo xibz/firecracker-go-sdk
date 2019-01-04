@@ -198,7 +198,7 @@ func (m Machine) LogLevel() string {
 
 // NewMachine initializes a new Machine instance and performs validation of the
 // provided Config.
-func NewMachine(ctx context.Context, cfg Config, opts ...Opt) *Machine {
+func NewMachine(ctx context.Context, cfg Config, opts ...Opt) (*Machine, error) {
 	m := &Machine{}
 	logger := log.New()
 
@@ -208,15 +208,15 @@ func NewMachine(ctx context.Context, cfg Config, opts ...Opt) *Machine {
 
 	m.Handlers = defaultHandlers
 	m.logger = log.NewEntry(logger)
-	if m.cmd == nil {
-		if cfg.DisableJailer {
-			m.Handlers.Validation = m.Handlers.Validation.Append(ConfigValidationHandler)
-			m.cmd = defaultFirecrackerVMMCommandBuilder.
-				WithSocketPath(m.cfg.SocketPath).
-				Build(ctx)
-		} else {
-			m.Handlers.Validation = m.Handlers.Validation.Append(JailerConfigValidationHandler)
-			jail(ctx, m, &cfg)
+	if cfg.DisableJailer {
+		m.Handlers.Validation = m.Handlers.Validation.Append(ConfigValidationHandler)
+		m.cmd = defaultFirecrackerVMMCommandBuilder.
+			WithSocketPath(m.cfg.SocketPath).
+			Build(ctx)
+	} else {
+		m.Handlers.Validation = m.Handlers.Validation.Append(JailerConfigValidationHandler)
+		if err := jail(ctx, m, &cfg); err != nil {
+			return nil, err
 		}
 	}
 
@@ -231,7 +231,7 @@ func NewMachine(ctx context.Context, cfg Config, opts ...Opt) *Machine {
 	m.cfg = cfg
 
 	m.logger.Debug("Called NewMachine()")
-	return m
+	return m, nil
 }
 
 // Start will iterate through the handler list and call each handler. If an

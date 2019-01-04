@@ -62,18 +62,22 @@ func init() {
 
 // Ensure that we can create a new machine
 func TestNewMachine(t *testing.T) {
-	m := NewMachine(
+	m, err := NewMachine(
 		context.Background(),
 		Config{
 			Debug: true,
 			JailerCfg: JailerConfig{
-				GID:      Int(100),
-				UID:      Int(100),
-				ID:       "my-micro-vm",
-				NumaNode: Int(0),
-				ExecFile: "/path/to/firecracker",
+				GID:               Int(100),
+				UID:               Int(100),
+				ID:                "my-micro-vm",
+				NumaNode:          Int(0),
+				ExecFile:          "/path/to/firecracker",
+				DevMapperStrategy: NewNaiveDevMapperStrategy("path", "kernel-image-path"),
 			},
 		})
+	if err != nil {
+		t.Fatalf("failed to create new machine: %v", err)
+	}
 
 	m.Handlers.Validation = m.Handlers.Validation.Clear()
 
@@ -96,6 +100,10 @@ func TestJailerMicroVMExecution(t *testing.T) {
 	var memSz int64 = 256
 
 	jailerTestPath := filepath.Join(testDataPath, "jailer")
+	// TODO: Make this easier
+	jailerFullRootPath := filepath.Join(jailerTestPath, "firecracker", "test-id")
+	os.MkdirAll(jailerTestPath, 0777)
+
 	socketPath := filepath.Join(jailerTestPath, "firecracker", "api.socket")
 	logFifo := filepath.Join(testDataPath, "firecracker.log")
 	metricsFifo := filepath.Join(testDataPath, "firecracker-metrics")
@@ -103,9 +111,8 @@ func TestJailerMicroVMExecution(t *testing.T) {
 		os.Remove(socketPath)
 		os.Remove(logFifo)
 		os.Remove(metricsFifo)
+		os.RemoveAll(jailerTestPath)
 	}()
-
-	os.MkdirAll(jailerTestPath, 0777)
 
 	cfg := Config{
 		SocketPath:      socketPath,
@@ -128,12 +135,13 @@ func TestJailerMicroVMExecution(t *testing.T) {
 			},
 		},
 		JailerCfg: JailerConfig{
-			GID:           Int(100),
-			UID:           Int(123),
-			NumaNode:      Int(0),
-			ID:            "test-id",
-			ChrootBaseDir: filepath.Join(testDataPath, "jailer"),
-			ExecFile:      getFirecrackerBinaryPath(),
+			GID:               Int(100),
+			UID:               Int(123),
+			NumaNode:          Int(0),
+			ID:                "test-id",
+			ChrootBaseDir:     jailerTestPath,
+			ExecFile:          getFirecrackerBinaryPath(),
+			DevMapperStrategy: NewNaiveDevMapperStrategy(jailerFullRootPath, filepath.Join(testDataPath, "vmlinux")),
 		},
 	}
 
@@ -146,7 +154,10 @@ func TestJailerMicroVMExecution(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	m := NewMachine(ctx, cfg)
+	m, err := NewMachine(ctx, cfg)
+	if err != nil {
+		t.Fatalf("failed to create new machine: %v", err)
+	}
 
 	vmmCtx, vmmCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer vmmCancel()
@@ -204,7 +215,11 @@ func TestMicroVMExecution(t *testing.T) {
 		WithBin(getFirecrackerBinaryPath()).
 		Build(ctx)
 
-	m := NewMachine(ctx, cfg, WithProcessRunner(cmd))
+	m, err := NewMachine(ctx, cfg, WithProcessRunner(cmd))
+	if err != nil {
+		t.Fatalf("failed to create new machine: %v", err)
+	}
+
 	m.Handlers.Validation = m.Handlers.Validation.Clear()
 
 	vmmCtx, vmmCancel := context.WithTimeout(ctx, 30*time.Second)
@@ -255,13 +270,17 @@ func TestStartVMM(t *testing.T) {
 		WithSocketPath(cfg.SocketPath).
 		WithBin(getFirecrackerBinaryPath()).
 		Build(ctx)
-	m := NewMachine(ctx, cfg, WithProcessRunner(cmd))
+	m, err := NewMachine(ctx, cfg, WithProcessRunner(cmd))
+	if err != nil {
+		t.Fatalf("failed to create new machine: %v", err)
+	}
+
 	defer m.StopVMM()
 	m.Handlers.Validation = m.Handlers.Validation.Clear()
 
 	timeout, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
 	defer cancel()
-	err := m.startVMM(timeout)
+	err = m.startVMM(timeout)
 	if err != nil {
 		t.Errorf("startVMM failed: %s", err)
 	} else {
@@ -551,14 +570,14 @@ func TestLogFiles(t *testing.T) {
 	cmd := exec.Command("ls")
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	m := NewMachine(
+	m, err := NewMachine(
 		ctx,
 		cfg,
 		WithClient(client),
 		WithProcessRunner(cmd),
 	)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("failed to create new machine: %v", err)
 	}
 	defer m.StopVMM()
 
