@@ -99,27 +99,14 @@ func TestJailerMicroVMExecution(t *testing.T) {
 	cpuTemplate := models.CPUTemplate(models.CPUTemplateT2)
 	var memSz int64 = 256
 
-	jailerTestPath := filepath.Join(testDataPath, "jailer")
-	// TODO: Make this easier
-	jailerFullRootPath := filepath.Join(jailerTestPath, "firecracker", "test-id")
-	os.MkdirAll(jailerTestPath, 0777)
-
-	socketPath := filepath.Join(jailerTestPath, "firecracker", "api.socket")
 	logFifo := filepath.Join(testDataPath, "firecracker.log")
 	metricsFifo := filepath.Join(testDataPath, "firecracker-metrics")
-	defer func() {
-		os.Remove(socketPath)
-		os.Remove(logFifo)
-		os.Remove(metricsFifo)
-		os.RemoveAll(jailerTestPath)
-	}()
-
+	id := "test-id"
 	cfg := Config{
-		SocketPath:      socketPath,
 		LogFifo:         logFifo,
 		MetricsFifo:     metricsFifo,
 		LogLevel:        "Debug",
-		KernelImagePath: filepath.Join(testDataPath, "vmlinux"),
+		KernelImagePath: filepath.Join("/tmp", "vmlinux"),
 		MachineCfg: models.MachineConfiguration{
 			VcpuCount:   nCpus,
 			CPUTemplate: cpuTemplate,
@@ -131,17 +118,17 @@ func TestJailerMicroVMExecution(t *testing.T) {
 				DriveID:      String("1"),
 				IsRootDevice: Bool(true),
 				IsReadOnly:   Bool(false),
-				PathOnHost:   String(filepath.Join(testDataPath, "root-drive.img")),
+				PathOnHost:   String(filepath.Join("/tmp", "root-drive.img")),
 			},
 		},
 		JailerCfg: JailerConfig{
-			GID:               Int(100),
-			UID:               Int(123),
-			NumaNode:          Int(0),
-			ID:                "test-id",
-			ChrootBaseDir:     jailerTestPath,
-			ExecFile:          getFirecrackerBinaryPath(),
-			DevMapperStrategy: NewNaiveDevMapperStrategy(jailerFullRootPath, filepath.Join(testDataPath, "vmlinux")),
+			GID:      Int(100),
+			UID:      Int(123),
+			NumaNode: Int(0),
+			ID:       id,
+			ExecFile: getFirecrackerBinaryPath(),
+			//DevMapperStrategy: NewNaiveDevMapperStrategy(jailerFullRootPath, filepath.Join(testDataPath, "vmlinux")),
+			DevMapperStrategy: NewBindMountDevMapperStrategy(),
 		},
 	}
 
@@ -158,6 +145,12 @@ func TestJailerMicroVMExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create new machine: %v", err)
 	}
+	defer func() {
+		os.Remove(m.cfg.SocketPath)
+		os.Remove(logFifo)
+		os.Remove(metricsFifo)
+		os.RemoveAll(filepath.Join(m.cfg.JailerCfg.chrootBaseDir(), id))
+	}()
 
 	vmmCtx, vmmCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer vmmCancel()
@@ -166,7 +159,17 @@ func TestJailerMicroVMExecution(t *testing.T) {
 		t.Errorf("Failed to start VMM: %v", err)
 	}
 
-	m.StopVMM()
+	if err := m.StopVMM(); err != nil {
+		t.Errorf("Failed to stop VMM: %v", err)
+	}
+
+	if err := m.Wait(ctx); err != nil {
+		t.Errorf("Waiting for machine has failed: %v", err)
+	}
+
+	if err := m.Handlers.Finish.Run(ctx, m); err != nil {
+		t.Errorf("failed to unmount drive %v", err)
+	}
 }
 
 func TestMicroVMExecution(t *testing.T) {

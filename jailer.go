@@ -22,10 +22,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
+
+	"github.com/hashicorp/go-multierror"
 )
 
 const (
-	defaultJailerPath = "/srv/jailer/firecracker"
+	defaultJailerPath = "/srv/jailer"
 	defaultJailerBin  = "jailer"
 
 	rootfsFolderName = "root"
@@ -88,6 +90,18 @@ type JailerConfig struct {
 
 	// DevMapperStrategy will dictate how files are transfered to the root drive.
 	DevMapperStrategy HandlersAdaptor
+}
+
+func (cfg JailerConfig) chrootBaseDir() string {
+	if len(cfg.ChrootBaseDir) == 0 {
+		return defaultJailerPath
+	}
+
+	return cfg.ChrootBaseDir
+}
+
+func (cfg JailerConfig) rootDir() string {
+	return filepath.Join(cfg.chrootBaseDir(), "firecracker", cfg.ID, rootfsFolderName)
 }
 
 // JailerCommandBuilder will build a jailer command. This can be used to
@@ -339,18 +353,15 @@ func (b JailerCommandBuilder) Build(ctx context.Context) *exec.Cmd {
 		cmd.Stderr = stderr
 	}
 
+	fmt.Println("JAILER", cmd.Args)
 	return cmd
 }
 
 // Jail will set up proper handlers and remove configuration validation due to
 // stating of files
 func jail(ctx context.Context, m *Machine, cfg *Config) error {
-	rootfs := ""
-	if len(cfg.JailerCfg.ChrootBaseDir) > 0 {
-		rootfs = filepath.Join(cfg.JailerCfg.ChrootBaseDir, "firecracker", cfg.JailerCfg.ID)
-	} else {
-		rootfs = filepath.Join(defaultJailerPath, cfg.JailerCfg.ID)
-	}
+	chroot := cfg.JailerCfg.chrootBaseDir()
+	rootfs := filepath.Join(chroot, "firecracker", cfg.JailerCfg.ID)
 
 	cfg.SocketPath = filepath.Join(rootfs, "api.socket")
 	m.cmd = JailerCommandBuilder{}.
@@ -454,18 +465,14 @@ func (s NaiveDevMapperStrategy) AdaptHandlers(handlers *Handlers) error {
 // BindMountDevMapperStrategy will use the syscall.Mount function to bind a
 // mount to the root drive.
 type BindMountDevMapperStrategy struct {
-	src      string
-	target   string
-	readOnly bool
+	data string
 }
 
 // NewBindMountDevMapperStrategy returns a new BindMountDevMapperStrategy that
 // can be used to bind mounts to the firecracker VMM.
-func NewBindMountDevMapperStrategy(src, target string, readOnly bool) BindMountDevMapperStrategy {
+func NewBindMountDevMapperStrategy() BindMountDevMapperStrategy {
 	return BindMountDevMapperStrategy{
-		src:      src,
-		target:   target,
-		readOnly: readOnly,
+		data: "gid=100,uid=123",
 	}
 }
 
@@ -485,15 +492,129 @@ func (s BindMountDevMapperStrategy) AdaptHandlers(handlers *Handlers) error {
 		},
 	)
 
+	handlers.Finish = handlers.Finish.Swappend(Handler{
+		Name: "finish.umountDrive",
+		Fn: func(ctx context.Context, m *Machine) error {
+			rootDir := m.cfg.JailerCfg.rootDir()
+			kernelImagePath := filepath.Join(rootDir, m.cfg.KernelImagePath)
+
+			var errs *multierror.Error
+			if err := syscall.Unmount(kernelImagePath, syscall.MNT_FORCE); err != nil {
+				multierror.Append(errs, err)
+			}
+
+			for _, drive := range m.cfg.Drives {
+				if err := syscall.Unmount(
+					filepath.Join(rootDir, StringValue(drive.PathOnHost)),
+					syscall.MNT_FORCE,
+				); err != nil {
+					multierror.Append(errs, err)
+				}
+			}
+
+			return errs.ErrorOrNil()
+		},
+	})
+
 	return nil
 }
 
-// TODO: add tests and add config remapping logic
+// TODO: add tests
 func (s BindMountDevMapperStrategy) handler(ctx context.Context, m *Machine) error {
-	mode := "rw"
-	if s.readOnly {
-		mode = "ro"
+	rootDir := m.cfg.JailerCfg.rootDir()
+	kernelImageName := filepath.Base(m.cfg.KernelImagePath)
+	kernelImagePath := filepath.Join(rootDir, kernelImageName)
+	uid := *m.cfg.JailerCfg.UID
+	gid := *m.cfg.JailerCfg.GID
+
+	/*mtr := newMounter(uid, gid, mntNSType)
+	defer mtr.Close()
+
+	if err := mtr.EnterNS(m.cmd.Process.Pid); err != nil {
+		return err
 	}
 
-	return syscall.Mount(s.src, s.target, "bind", 0, mode)
+	if err := mtr.Mount(m.cfg.KernelImagePath, kernelImagePath, true); err != nil {
+		return err
+	}
+
+	m.cfg.KernelImagePath = kernelImageName
+
+	for i, drive := range m.cfg.Drives {
+		hostPath := StringValue(drive.PathOnHost)
+		driveFileName := filepath.Base(hostPath)
+		mountDriveFilePath := filepath.Join(rootDir, driveFileName)
+
+		if err := mtr.Mount(StringValue(drive.PathOnHost), mountDriveFilePath, BoolValue(drive.IsReadOnly)); err != nil {
+			return err
+		}
+
+		m.cfg.Drives[i].PathOnHost = String(driveFileName)
+	}*/
+
+	if err := bindMount(m.cfg.KernelImagePath, kernelImagePath, m.cmd.Process.Pid, uid, gid); err != nil {
+		return fmt.Errorf("failed to mount kernel image: %v", err)
+	}
+
+	m.cfg.KernelImagePath = kernelImageName
+	fmt.Println("KERNEL PATH", m.cfg.KernelImagePath)
+
+	for i, drive := range m.cfg.Drives {
+		hostPath := StringValue(drive.PathOnHost)
+		driveFileName := filepath.Base(hostPath)
+		mountDriveFilePath := filepath.Join(rootDir, driveFileName)
+
+		if err := bindMount(
+			StringValue(drive.PathOnHost),
+			mountDriveFilePath,
+			m.cmd.Process.Pid,
+			uid,
+			gid,
+		); err != nil {
+			return fmt.Errorf("failed to mount drive %q: %v", mountDriveFilePath, err)
+		}
+
+		m.cfg.Drives[i].PathOnHost = String(driveFileName)
+
+		fmt.Println("DRIVE PATH", *m.cfg.Drives[i].PathOnHost)
+	}
+
+	return nil
+}
+
+const nsenterBin = "nsenter"
+
+func bindMount(src, target string, pid, uid, gid int) error {
+	if _, err := os.Stat(src); os.IsNotExist(err) {
+		return fmt.Errorf("%s could not be found", src)
+	}
+
+	fmt.Println("SRC TARGET", src, target)
+	cmd := exec.Command(
+		nsenterBin,
+		"-t",
+		strconv.Itoa(pid),
+		fmt.Sprintf("sudo touch %s", target),
+	)
+
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	fmt.Println("ARGSSSSSSSSSSSSSSSSS", cmd.Args)
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+
+	cmd = exec.Command(
+		nsenterBin,
+		"-m",
+		"-t",
+		strconv.Itoa(pid),
+		fmt.Sprintf("sudo mount --bind %s %s", src, target),
+	)
+
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	fmt.Println("ARGSSSSSSSSSSSSSSSSS", cmd.Args)
+	return cmd.Run()
 }

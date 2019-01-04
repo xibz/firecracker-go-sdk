@@ -203,6 +203,7 @@ type Handler struct {
 type Handlers struct {
 	Validation HandlerList
 	FcInit     HandlerList
+	Finish     HandlerList
 }
 
 // Run will execute all handlers in the Handlers object by flattening the lists
