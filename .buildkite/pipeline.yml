@@ -29,8 +29,8 @@ steps:
   - label: ':hammer: tests'
     commands:
       - 'ln -s /var/lib/fc-ci/vmlinux.bin testdata/vmlinux'
-      - 'ln -s /usr/local/bin/firecracker testdata/firecracker'
-      - 'ln -s /usr/local/bin/jailer testdata/jailer'
+      - 'ln -s /usr/local/bin/firecracker-v0.15.0 testdata/firecracker'
+      - 'ln -s /usr/local/bin/jailer-v0.15.0 testdata/jailer'
       - "make test EXTRAGOARGS='-v -count=1'"
     agents:
       queue: "${BUILDKITE_AGENT_META_DATA_QUEUE:-default}"
