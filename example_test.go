@@ -4,7 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"syscall"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 
 	"github.com/firecracker-microvm/firecracker-go-sdk"
 	models "github.com/firecracker-microvm/firecracker-go-sdk/client/models"
@@ -220,51 +224,86 @@ func ExampleNetworkInterface_rateLimiting() {
 	}
 }
 
-func ExampleJailerCommandBuilder() {
+func ExampleJailerConfig_enablingJailer() {
 	ctx := context.Background()
-	// Creates a jailer command using the JailerCommandBuilder.
-	b := firecracker.NewJailerCommandBuilder().
-		WithID("my-test-id").
-		WithUID(123).
-		WithGID(100).
-		WithNumaNode(0).
-		WithExecFile("/usr/local/bin/firecracker").
-		WithChrootBaseDir("/tmp").
-		WithStdout(os.Stdout).
-		WithStderr(os.Stderr)
+	vmmCtx, vmmCancel := context.WithCancel(ctx)
+	defer vmmCancel()
 
-	const socketPath = "/tmp/firecracker/my-test-id/api.socket"
-	cfg := firecracker.Config{
-		SocketPath:      socketPath,
-		KernelImagePath: "./vmlinux",
-		Drives: []models.Drive{
-			models.Drive{
-				DriveID:      firecracker.String("1"),
-				IsRootDevice: firecracker.Bool(true),
-				IsReadOnly:   firecracker.Bool(false),
-				PathOnHost:   firecracker.String("/path/to/root/drive"),
-			},
-		},
+	const id = "my-jailer-test"
+	const path = "/path/to/jailer-workspace"
+	pathToWorkspace := filepath.Join(path, "firecracker", id)
+	const kernelImagePath = "/path/to/kernel-image"
+
+	uid := 123
+	gid := 100
+
+	fcCfg := firecracker.Config{
+		SocketPath:      "api.socket",
+		KernelImagePath: kernelImagePath,
+		KernelArgs:      "console=ttyS0 reboot=k panic=1 pci=off",
+		Drives:          firecracker.NewDrivesBuilder("/path/to/rootfs").Build(),
+		LogLevel:        "Debug",
 		MachineCfg: models.MachineConfiguration{
-			VcpuCount: 1,
+			VcpuCount:  1,
+			HtEnabled:  false,
+			MemSizeMib: 256,
 		},
-		DisableValidation: true,
+		EnableJailer: true,
+		JailerCfg: firecracker.JailerConfig{
+			UID:            &uid,
+			GID:            &gid,
+			ID:             id,
+			NumaNode:       firecracker.Int(0),
+			ChrootBaseDir:  path,
+			ChrootStrategy: firecracker.NewNaiveChrootStrategy(pathToWorkspace, kernelImagePath),
+		},
 	}
 
-	// Passes the custom jailer command into the constructor
-	m, err := firecracker.NewMachine(ctx, cfg, firecracker.WithProcessRunner(b.Build(ctx)))
+	// This will stat the kernel image and take a look at its GID and UID. If the
+	// GID and UID do not matach the GID and UID provided in the configuration,
+	// this will error out and should be resolved by correctly adding the correct
+	// user and group ID to the file.
+	kernelImageInfo := syscall.Stat_t{}
+	if err := syscall.Stat(fcCfg.KernelImagePath, &kernelImageInfo); err != nil {
+		panic(fmt.Errorf("Failed to stat kernel image: %v", err))
+	}
+
+	if kernelImageInfo.Uid != uint32(uid) || kernelImageInfo.Gid != uint32(gid) {
+		panic(fmt.Errorf("Kernel image does not have the proper UID or GID.\n"+
+			"To fix this simply run:\n"+
+			"sudo chown %d:%d %s",
+			uid, gid, fcCfg.KernelImagePath))
+	}
+
+	// Check that each drive has the correct UID and GID.
+	for _, drive := range fcCfg.Drives {
+		driveImageInfo := syscall.Stat_t{}
+		drivePath := firecracker.StringValue(drive.PathOnHost)
+		if err := syscall.Stat(drivePath, &driveImageInfo); err != nil {
+			panic(fmt.Errorf("Failed to stat kernel image: %v", err))
+		}
+
+		if driveImageInfo.Uid != uint32(uid) || kernelImageInfo.Gid != uint32(gid) {
+			panic(fmt.Errorf("Drive does not have the proper UID or GID.\n"+
+				"To fix this simply run:\n"+
+				"sudo chown %d:%d %s",
+				uid, gid, drivePath))
+		}
+	}
+
+	logger := log.New()
+	m, err := firecracker.NewMachine(vmmCtx, fcCfg, firecracker.WithLogger(log.NewEntry(logger)))
 	if err != nil {
-		panic(fmt.Errorf("failed to create new machine: %v", err))
-	}
-
-	// This does not copy any of the files over to the rootfs since a process
-	// runner was specified. This examples assumes that the files have been
-	// properly mounted.
-	if err := m.Start(ctx); err != nil {
 		panic(err)
 	}
 
-	tCtx, cancelFn := context.WithTimeout(ctx, time.Minute)
-	defer cancelFn()
-	m.Wait(tCtx)
+	if err := m.Start(vmmCtx); err != nil {
+		panic(err)
+	}
+	defer m.StopVMM()
+
+	// wait for the VMM to exit
+	if err := m.Wait(vmmCtx); err != nil {
+		panic(err)
+	}
 }
