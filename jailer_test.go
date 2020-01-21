@@ -36,8 +36,6 @@ var testCases = []struct {
 			"/path/to/firecracker",
 			"--node",
 			"0",
-			"--seccomp-level",
-			"0",
 		},
 		expectedSockPath: filepath.Join(defaultJailerPath, "my-test-id", rootfsFolderName, "api.socket"),
 	},
@@ -64,8 +62,6 @@ var testCases = []struct {
 			"/path/to/firecracker",
 			"--node",
 			"0",
-			"--seccomp-level",
-			"0",
 		},
 		expectedSockPath: filepath.Join(defaultJailerPath, "my-test-id", rootfsFolderName, "api.socket"),
 	},
@@ -80,7 +76,6 @@ var testCases = []struct {
 			ChrootStrategy: NewNaiveChrootStrategy("path", "kernel-image-path"),
 			ExecFile:       "/path/to/firecracker",
 			ChrootBaseDir:  "/tmp",
-			SeccompLevel:   SeccompLevelAdvanced,
 			JailerBinary:   "/path/to/the/jailer",
 		},
 		expectedArgs: []string{
@@ -99,8 +94,6 @@ var testCases = []struct {
 			"/tmp",
 			"--netns",
 			"/path/to/netns",
-			"--seccomp-level",
-			"2",
 		},
 		expectedSockPath: filepath.Join("/tmp", "firecracker", "my-test-id", rootfsFolderName, "api.socket"),
 	},
@@ -114,7 +107,6 @@ func TestJailerBuilder(t *testing.T) {
 				WithUID(IntValue(c.jailerCfg.UID)).
 				WithGID(IntValue(c.jailerCfg.GID)).
 				WithNumaNode(IntValue(c.jailerCfg.NumaNode)).
-				WithSeccompLevel(c.jailerCfg.SeccompLevel).
 				WithExecFile(c.jailerCfg.ExecFile)
 
 			if len(c.jailerCfg.JailerBinary) > 0 {

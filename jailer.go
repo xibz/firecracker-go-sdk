@@ -38,20 +38,6 @@ var (
 	ErrMissingJailerConfig = fmt.Errorf("jailer config was not set for use")
 )
 
-// SeccompLevelValue represents a secure computing level type.
-type SeccompLevelValue int
-
-// secure computing levels
-const (
-	// SeccompLevelDisable is the default value.
-	SeccompLevelDisable SeccompLevelValue = iota
-	// SeccompLevelBasic prohibits syscalls not whitelisted by Firecracker.
-	SeccompLevelBasic
-	// SeccompLevelAdvanced adds further checks on some of the parameters of the
-	// allowed syscalls.
-	SeccompLevelAdvanced
-)
-
 // JailerConfig is jailer specific configuration needed to execute the jailer.
 type JailerConfig struct {
 	// GID the jailer switches to as it execs the target binary.
@@ -90,15 +76,6 @@ type JailerConfig struct {
 	//  STDERR to /dev/null
 	Daemonize bool
 
-	// SeccompLevel specifies whether seccomp filters should be installed and how
-	// restrictive they should be. Possible values are:
-	//
-	//	0 : (default): disabled.
-	//	1 : basic filtering. This prohibits syscalls not whitelisted by Firecracker.
-	//	2 : advanced filtering. This adds further checks on some of the
-	//			parameters of the allowed syscalls.
-	SeccompLevel SeccompLevelValue
-
 	// ChrootStrategy will dictate how files are transfered to the root drive.
 	ChrootStrategy HandlersAdapter
 
@@ -121,10 +98,10 @@ type JailerCommandBuilder struct {
 	node     int
 
 	// optional params
-	chrootBaseDir string
-	netNS         string
-	daemonize     bool
-	seccompLevel  SeccompLevelValue
+	chrootBaseDir   string
+	netNS           string
+	daemonize       bool
+	firecrackerArgs []string
 
 	stdin  io.Reader
 	stdout io.Writer
@@ -155,11 +132,11 @@ func (b JailerCommandBuilder) Args() []string {
 		args = append(args, "--netns", b.netNS)
 	}
 
-	args = append(args, "--seccomp-level", strconv.Itoa(int(b.seccompLevel)))
-
 	if b.daemonize {
 		args = append(args, "--daemonize")
 	}
+
+	args = append(args, b.firecrackerArgs...)
 
 	return args
 }
@@ -229,14 +206,6 @@ func (b JailerCommandBuilder) WithDaemonize(daemonize bool) JailerCommandBuilder
 	return b
 }
 
-// WithSeccompLevel will set the provided level to the builder. This represents
-// the seccomp filters that should be installed and how restrictive they should
-// be.
-func (b JailerCommandBuilder) WithSeccompLevel(level SeccompLevelValue) JailerCommandBuilder {
-	b.seccompLevel = level
-	return b
-}
-
 // Stdout will return the stdout that will be used when creating the
 // firecracker exec.Command
 func (b JailerCommandBuilder) Stdout() io.Writer {
@@ -273,6 +242,13 @@ func (b JailerCommandBuilder) Stdin() io.Reader {
 // firecracker exec.Command.
 func (b JailerCommandBuilder) WithStdin(stdin io.Reader) JailerCommandBuilder {
 	b.stdin = stdin
+	return b
+}
+
+// WithFirecrackerArgs will adds these arguments to the end of the argument
+// chain which the jailer will intepret to belonging to Firecracke
+func (b JailerCommandBuilder) WithFirecrackerArgs(args ...string) JailerCommandBuilder {
+	b.firecrackerArgs = args
 	return b
 }
 
@@ -329,7 +305,7 @@ func jail(ctx context.Context, m *Machine, cfg *Config) error {
 		WithExecFile(cfg.JailerCfg.ExecFile).
 		WithChrootBaseDir(cfg.JailerCfg.ChrootBaseDir).
 		WithDaemonize(cfg.JailerCfg.Daemonize).
-		WithSeccompLevel(cfg.JailerCfg.SeccompLevel).
+		WithFirecrackerArgs("--seccomp-level", cfg.SeccompLevel.String()).
 		WithStdout(stdout).
 		WithStderr(stderr)
 
