@@ -620,6 +620,11 @@ func (m *Machine) setupLogging(ctx context.Context) error {
 		ShowLogOrigin: Bool(false),
 	}
 
+	m.logger.Debugf("Attempting to configure VMM logging to %s, metrics to %s",
+		m.Cfg.LogFifo,
+		m.Cfg.MetricsFifo,
+	)
+
 	_, err := m.client.PutLogger(ctx, &l)
 	if err != nil {
 		return err
